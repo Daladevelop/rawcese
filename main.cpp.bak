@@ -1,0 +1,842 @@
+// Rawcese aims to become a simple but yet intriguing turn based strategy game with dragons and tanks
+// Developed by: Emil Österlund, Adam Nyberg, Christofer Beijar Oden
+// For license - see gplv2
+// http://launchpad.net/rawcese
+
+#include <SDL/SDL.h>
+#include <SDL/SDL_image.h>
+#include <SDL/SDL_ttf.h>
+#include <cstdio>
+#include <cstdlib>
+#include <ctime>
+#include "globals.hpp"
+#include "World.hpp"
+#include "Unit.hpp"
+#include "Player.hpp"
+#include "Interface.h"
+
+SDL_Surface *screen = NULL;
+std::vector<Player> players;
+
+SDL_Surface *initialize( );
+void handle_events( bool *quit, SDL_Rect *camera, World *world,
+        std::vector<Player> *players, int *currentPlayer );
+
+void update( SDL_Rect *camera, World *world, std::vector<Player> *players );
+
+void draw( SDL_Surface *spriteMap, SDL_Surface *fontMap, SDL_Rect *camera,
+        World *world, std::vector<Player> *players, int currentPlayer );
+
+void draw_water_sprites( int row, int col, SDL_Surface *spriteMap,
+        SDL_Surface *canvas, World*, SDL_Rect *camera );
+
+void draw_tree_sprites( int row, int col, SDL_Surface *spriteMap,
+        SDL_Surface *canvas, World*, SDL_Rect *camera );
+
+void draw_mini_map( SDL_Surface *dest, SDL_Rect *bounds, int zoom,
+        World *world, std::vector<Player> *pPlayers, int currentPlayer,
+        SDL_Rect *camera );
+
+void center_camera( SDL_Rect *camera, int row, int col );
+
+int main( int argc, char **args )
+{
+    SDL_Rect        the_camera      = { 0, 0,
+        SCREEN_WIDTH - PANEL_WIDTH, SCREEN_HEIGHT };
+    World           the_world;
+    PlayerManager   the_player_manager;
+    Interface       the_interface;
+
+    SDL_Surface *spriteMap  = NULL;
+    SDL_Surface *fontMap    = NULL;
+    TTF_Font    *font       = NULL;
+
+    int currentPlayer       = 0;
+    int playerCount         = 2;
+
+    //
+    // Initialize systems
+    //
+    printf( "---Initializing---\n" );
+    srand( (unsigned)time(NULL) );
+    screen = initialize();
+    if ( screen == NULL ) {
+        printf( "Failed to initialize screen, quitting\n" );
+        return 1;
+    }
+
+    //
+    // Load external data
+    //
+    printf( "---Loading external data---\n" );
+    spriteMap = load_image( "sprites/sprite_map.png" );
+    fontMap   = load_image( "sprites/font_map.png" );
+
+    if ( spriteMap == NULL || fontMap == NULL ) {
+        printf( "Failed to load graphic data\n" );
+        return 1;
+    }
+
+    font = load_font( "fonts/ProggyClean.ttf", 18 );
+    if ( font == NULL ) {
+        printf( "Failed to load font, quitting\n" );
+        return 1;
+    }
+
+    //
+    // Initialize game world
+    //
+    printf( "---Generating world---\n" );
+    world.generate( 128, 128 );
+
+    printf( "---Initializing players---\n" );
+    for ( int playerID = 0; playerID < playerCount; ++playerID ) {
+        the_player_manager.initialize( &the_world, 2 );
+    }
+
+    printf( "---Setting up interface---\n" );
+    the_interface.initialize( the_screen, &the_camera, &the_world,
+            &the_player_manager );
+
+    //
+    // Start main loop
+    //
+    printf( "---Starting main loop---\n" );
+    bool quit = false;
+    while( quit == false ) {
+
+        handle_events( &quit, &camera, &world, &players, &currentPlayer );
+
+        update( &camera, &world, &players );
+
+        draw( spriteMap, fontMap, &camera, &world, &players, currentPlayer );
+
+        if ( SDL_Flip( screen ) == -1 )
+            break;
+    }
+
+    //
+    // Take out the trash
+    //
+    SDL_FreeSurface( spriteMap );
+    SDL_FreeSurface( fontMap );
+    SDL_FreeSurface( screen );
+    TTF_Quit( );
+    SDL_Quit( );
+
+    return 0;
+}
+
+SDL_Surface *initialize( )
+{
+    SDL_Surface *screen = NULL;
+
+    if ( SDL_Init( SDL_INIT_EVERYTHING ) == -1 ) {
+        return NULL;
+    }
+
+    screen = SDL_SetVideoMode( SCREEN_WIDTH, SCREEN_HEIGHT,
+            SCREEN_BPP, SDL_SWSURFACE );
+
+    if ( screen == NULL ) {
+        printf( "SDL_SetVideoMode: %s\n", SDL_GetError( ) );
+    }
+
+    if ( TTF_Init( ) == -1 ) {
+        return NULL;
+    }
+
+    SDL_WM_SetCaption( "rawcese IMA EAT YOUR TANK. NOM NOM NOM. NO MORE TANK."
+            " / DRAGONMASTER", NULL );
+
+    return screen;
+}
+
+void handle_events( bool *quit, SDL_Rect *camera, World *world,
+        std::vector<Player> *players, int *currentPlayer ) {
+
+    SDL_Event   event;
+    Player      *pCurrentPlayer = &players->at( *currentPlayer );
+    Unit        *pUnit = NULL;
+    int         mouseX, mouseY;
+
+    const int SCROLL_BORDER = 64;
+    SDL_GetMouseState( &mouseX, &mouseY );
+    if ( mouseX > camera->w - SCROLL_BORDER ) {
+        camera->x += ( SCROLL_BORDER - camera->w + mouseX ) / 8;
+    }
+    else if ( mouseX < SCROLL_BORDER ) {
+        camera->x -= ( SCROLL_BORDER - mouseX ) / 8;
+    }
+
+    if ( mouseY > camera->h - SCROLL_BORDER ) {
+        camera->y += ( SCROLL_BORDER - camera->h + mouseY ) / 8;
+    }
+    else if ( mouseY < SCROLL_BORDER ) {
+        camera->y -= ( SCROLL_BORDER - mouseY ) / 8;
+    }
+
+    while ( SDL_PollEvent( &event )) {
+
+        if ( event.type == SDL_KEYDOWN ) {
+
+            switch ( event.key.keysym.sym ) {
+
+                case SDLK_ESCAPE:
+                    *quit = true;
+
+                case SDLK_TAB:
+
+                    pUnit = pCurrentPlayer->select_next_unit( );
+                    if ( pUnit != NULL ) {
+                        center_camera( camera,
+                                pUnit->get_row(), pUnit->get_col() );
+                    }
+
+                    break;
+
+                case SDLK_KP7:
+                    pCurrentPlayer->move_selected( NW, players );
+                    break;
+
+                case SDLK_UP:
+                case SDLK_KP8:
+                    pCurrentPlayer->move_selected( N, players );  
+                    break;
+
+                case SDLK_KP9:
+                    pCurrentPlayer->move_selected( NE, players );
+                    break;
+
+                case SDLK_LEFT:
+                case SDLK_KP4:
+                    pCurrentPlayer->move_selected( W, players );
+                    break;
+
+                case SDLK_RIGHT:
+                case SDLK_KP6:
+                    pCurrentPlayer->move_selected( E, players );
+                    break;
+
+                case SDLK_KP1:
+                    pCurrentPlayer->move_selected( SW, players );
+                    break;
+
+                case SDLK_DOWN:
+                case SDLK_KP2:
+                    pCurrentPlayer->move_selected( S, players );
+                    break;
+
+                case SDLK_KP3:
+                    pCurrentPlayer->move_selected( SE, players );
+                    break;
+
+                case SDLK_n:
+                    pCurrentPlayer->create_unit( 0, 0, rand( ) % 4 + 1 );
+                    break;
+
+                // E for End turn
+                case SDLK_e:
+
+                    pCurrentPlayer->on_end_turn( );
+
+                    if ( unsigned( ++*currentPlayer ) >= players->size( ) )
+                        *currentPlayer = 0;
+
+                    printf( "Changing to player %d\n",*currentPlayer );
+                    pCurrentPlayer->on_begin_turn( );
+
+                    break;
+                    
+                case SDLK_d:
+                    camera->x += 32;
+                    break;
+
+                case SDLK_s:
+                    camera->y += 32;
+                    break;
+
+                case SDLK_a:
+                    camera->x -= 32;
+                    break;
+
+                case SDLK_w:
+                    camera->y -= 32;
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        else if ( event.type == SDL_MOUSEBUTTONDOWN ) {
+
+            if ( event.button.button == SDL_BUTTON_LEFT ) {
+                pCurrentPlayer->select_at(
+                        ( mouseY + camera->y ) / TILE_SIZE,
+                        ( mouseX + camera->x ) / TILE_SIZE );
+            }
+            else if ( event.button.button == SDL_BUTTON_RIGHT ) {
+                center_camera( camera,
+                        (mouseY + camera->y) / TILE_SIZE,
+                        (mouseX + camera->x) / TILE_SIZE );
+            }
+        }
+
+        else if ( event.type == SDL_QUIT ) {
+            *quit = true;
+        }
+    }
+}
+
+void update( SDL_Rect *camera, World *world, std::vector<Player> *players ) {
+
+    if ( camera->x < 0 )
+        camera->x = 0;
+    else if ( camera->x + camera->w > world->get_cols( ) * TILE_SIZE )
+        camera->x = world->get_cols( ) * TILE_SIZE - camera->w;
+
+    if ( camera->y < 0 )
+        camera->y = 0;
+    else if ( camera->y + camera->h > world->get_rows( ) * TILE_SIZE )
+        camera->y = world->get_rows( ) * TILE_SIZE - camera->h;
+
+    std::vector<Player>::iterator pit;
+    for ( pit = players->begin( ); pit < players->end( ); ++pit ) {
+        pit->update( );
+    }
+}
+
+void draw( SDL_Surface *spriteMap, SDL_Surface *fontMap, SDL_Rect *camera,
+        World *world, std::vector<Player> *players, int currentPlayer )
+{
+    Player *pCurrentPlayer = &players->at( currentPlayer );
+    Unit   *pUnit          = NULL;
+
+    // Clear background to black
+    SDL_FillRect( screen, NULL,
+            SDL_MapRGB( screen->format, 0x00, 0x00, 0x00 ) );
+
+    int rows = world->get_rows( );
+    int cols = world->get_cols( );
+
+    // Go through each tile and draw the contents in layers to screen
+    for ( int row = 0; row < rows; ++row ) {
+
+        for ( int col = 0; col < cols; ++col ) {
+
+            // If the tile is not visible inside the camera box, skip it
+            if (    col * 32 + 32 < camera->x ||
+                    col * 32 > camera->x + camera->w ||
+                    row * 32 + 32 < camera->y ||
+                    row * 32 > camera->y + camera->h )
+                continue;
+
+            // If the tile is not discovered by the current player, skip it
+            //  or draw something nice indicating it's undiscovered.
+            //  Black Square ( tm ) will do for a long time
+            //
+            // To see the whole world in its former glory, comment out : )
+            if ( pCurrentPlayer->tile_is_discovered( row, col ) == false )
+                continue;
+
+            // Draw the world tile
+            switch ( world->get_tile( row, col )) {
+
+                case TILE_GRASS:
+                    apply_surface(
+                            col * TILE_SIZE - camera->x,
+                            row * TILE_SIZE - camera->y,
+                            spriteMap, screen,
+                            &RECT_GRASS );
+                    break;
+
+                case TILE_WATER:
+                    draw_water_sprites( row, col, spriteMap, 
+                            screen, world, camera );
+                    break;
+
+                case TILE_TREES:
+                    draw_tree_sprites( row, col, spriteMap,
+                            screen, world, camera );
+                    break;
+
+                default:
+                    break;
+            }
+
+
+            //  -------------------------------------------------
+
+            //  Draw buildings here so units can stand on top of them
+            //  Buildings should probably be visible even if they are covered
+            //   by shroud, it's not like they're going anywhere
+
+            //  -------------------------------------------------
+
+
+            // Check if the tile is visible and draw some shroud if it's not
+            if ( pCurrentPlayer->tile_is_visible( row, col ) == false ) {
+
+                apply_surface(
+                        col * TILE_SIZE - camera->x,
+                        row * TILE_SIZE - camera->y,
+                        spriteMap, screen, &RECT_SHROUD );
+
+                // Skip drawing any units and continue with next tile
+                continue;
+            }
+
+            // The tile is in camera view, discovered and visible
+            // Draw any unit on it
+            for ( std::vector<Player>::iterator pit = players->begin( );
+                    pit < players->end( ); ++pit ) {
+
+                pUnit = pit->get_unit_at( row, col );
+
+                if ( pUnit != NULL ) {
+
+                    // Figure out which sprite to draw depending on player and
+                    //  unit type
+                    int unitType = pUnit->get_type( );
+                    SDL_Rect rect;
+
+                    switch ( unitType ) {
+
+                        case UNIT_DRAGON:
+                            
+                            // Get the base coords for the sprite
+                            rectcpy( &rect, &RECT_DRAGON );
+                            // Get the offset for correct player color
+                            rect.y += 32 * pUnit->get_owner( );
+
+                            apply_surface(
+                                    col * TILE_SIZE - camera->x,
+                                    row * TILE_SIZE - camera->y,
+                                    spriteMap, screen, &rect );
+                            break;
+
+                        case UNIT_INFANTRY:
+
+                            rectcpy( &rect, &RECT_INFANTRY );
+                            rect.y += 32 * pUnit->get_owner( );
+
+                            apply_surface(
+                                    col * TILE_SIZE - camera->x,
+                                    row * TILE_SIZE - camera->y,
+                                    spriteMap, screen, &rect );
+                            break;
+
+                        case UNIT_ARMOR:
+
+                            rectcpy( &rect, &RECT_ARMOR );
+                            rect.y += 32 * pUnit->get_owner( );
+
+                            apply_surface(
+                                    col * TILE_SIZE - camera->x,
+                                    row * TILE_SIZE - camera->y,
+                                    spriteMap, screen, &rect );
+                            break;
+
+                        case UNIT_HOWITZER:
+
+                            rectcpy( &rect, &RECT_HOWITZER );
+                            rect.y += 32 * pUnit->get_owner( );
+
+                            apply_surface(
+                                    col * TILE_SIZE - camera->x,
+                                    row * TILE_SIZE - camera->y,
+                                    spriteMap, screen, &rect );
+                            break;
+                    }
+                }
+            }
+            // Done drawing unit
+        }
+    }
+    // Done iterating through rows and columns
+
+    //
+    // Draw markers, tokens, etc.
+    //
+
+    // Draw Marker
+    pUnit = pCurrentPlayer->get_selected_unit( );
+    if( pUnit != NULL ) {
+
+        int row = pUnit->get_row( );
+        int col = pUnit->get_col( );
+        apply_surface(
+                col * TILE_SIZE - camera->x,
+                row * TILE_SIZE - camera->y,
+                spriteMap, screen, &RECT_MARKER );
+    }
+
+    //
+    // Draw side panel
+    //
+
+    SDL_Rect panelRect = { SCREEN_WIDTH - PANEL_WIDTH, 0,
+        PANEL_WIDTH, SCREEN_HEIGHT };
+    SDL_FillRect( screen, &panelRect,
+            SDL_MapRGB( screen->format, 0x88, 0x88, 0xaa ) );
+    // Draw mini map
+    // Zoom not yet implemented fully
+    int zoom = 1;
+    SDL_Rect bounds = { SCREEN_WIDTH - ( 128 + zoom ) - 16, 16, 128, 128 };
+    draw_mini_map( screen, &bounds, zoom,
+            world, players, currentPlayer, camera );
+
+    // Draw status message
+
+    // Message initialization
+    char text[50] = {};
+    sprintf( text, "Your turn player %d!", currentPlayer + 1 );
+    // Draw message
+    blit_string( 4, 4, text, screen, fontMap );
+}
+
+void draw_water_sprites( int row, int col, SDL_Surface *spriteMap,
+        SDL_Surface *canvas, World *world, SDL_Rect *camera ) {
+
+    SDL_Rect rect;
+
+    //    printf( "DEBUG: Calculating what sprite to draw\n" );
+
+    // Draw NW tile
+    // Check northern and western tile
+    if (    world->get_tile( row - 1, col ) == TILE_WATER &&
+            world->get_tile( row, col - 1 ) == TILE_WATER ) {
+
+        if ( world->get_tile( row - 1, col - 1 ) != TILE_WATER ) {
+            //            printf( "DEBUG: Sprite is RECT_OUTER_CLIFF_NW\n" );
+            rect = RECT_OUTER_CLIFF_NW;
+        }
+        else {
+            //            printf( "DEBUG: Sprite is RECT_WATER\n" );
+            rect = RECT_WATER;
+        }
+    }
+    else if( world->get_tile( row - 1, col ) != TILE_WATER &&
+            world->get_tile( row, col - 1 ) == TILE_WATER ) {
+
+        //        printf( "DEBUG: Sprite is RECT_CLIFF_N\n" );
+        rect = RECT_CLIFF_N;
+    }
+    else if( world->get_tile( row - 1, col ) == TILE_WATER &&
+            world->get_tile( row, col - 1 ) != TILE_WATER ) {
+
+        //        printf( "DEBUG: Sprite is RECT_CLIFF_W\n" );
+        rect = RECT_CLIFF_W;
+    }
+    else if( world->get_tile( row - 1, col ) != TILE_WATER &&
+            world->get_tile( row, col - 1 ) != TILE_WATER ) {
+
+        //        printf( "DEBUG: Sprite is RECT_CLIFF_NW\n" );
+        rect = RECT_CLIFF_NW;
+    }
+
+    //    printf( "DEBUG: Drawing NW tile\n" );
+    apply_surface(
+            col * TILE_SIZE - camera->x,
+            row * TILE_SIZE - camera->y,
+            spriteMap, canvas, &rect );
+
+    // Draw NE tile
+    // Check northern and eastern tile
+    if (    world->get_tile( row - 1, col ) == TILE_WATER &&
+            world->get_tile( row, col + 1 ) == TILE_WATER )
+
+        if ( world->get_tile( row - 1, col + 1 ) != TILE_WATER )
+            rect = RECT_OUTER_CLIFF_NE;
+        else
+            rect = RECT_WATER;
+
+    else if( world->get_tile( row - 1, col ) != TILE_WATER &&
+            world->get_tile( row, col + 1 ) == TILE_WATER )
+
+        rect = RECT_CLIFF_N;
+
+    else if( world->get_tile( row - 1, col ) == TILE_WATER &&
+            world->get_tile( row, col + 1 ) != TILE_WATER )
+
+        rect = RECT_CLIFF_E;
+
+    else if( world->get_tile( row - 1, col ) != TILE_WATER &&
+            world->get_tile( row, col + 1 ) != TILE_WATER )
+
+        rect = RECT_CLIFF_NE;
+
+    //    printf( "DEBUG: Drawing NE tile\n" );
+    apply_surface(
+            col * TILE_SIZE + 16 - camera->x,
+            row * TILE_SIZE - camera->y,
+            spriteMap, canvas, &rect );
+
+    // Draw SW tile
+    // Check southern and western tile
+    if (    world->get_tile( row + 1, col ) == TILE_WATER &&
+            world->get_tile( row, col - 1 ) == TILE_WATER )
+
+        if ( world->get_tile( row + 1, col - 1 ) != TILE_WATER )
+            rect = RECT_OUTER_CLIFF_SW;
+        else
+            rect = RECT_WATER;
+
+    else if( world->get_tile( row + 1, col ) != TILE_WATER &&
+            world->get_tile( row, col - 1 ) == TILE_WATER )
+
+        rect = RECT_CLIFF_S;
+
+    else if( world->get_tile( row + 1, col ) == TILE_WATER &&
+            world->get_tile( row, col - 1 ) != TILE_WATER )
+
+        rect = RECT_CLIFF_W;
+
+    else if( world->get_tile( row + 1, col ) != TILE_WATER &&
+            world->get_tile( row, col - 1 ) != TILE_WATER )
+
+        rect = RECT_CLIFF_SW;
+
+    //    printf( "DEBUG: Drawing SW tile\n" );
+    apply_surface(
+            col * TILE_SIZE - camera->x,
+            row * TILE_SIZE + 16 - camera->y,
+            spriteMap, canvas, &rect );
+
+    // Draw SE tile
+    // Check southern and eastern tile
+    if (    world->get_tile( row + 1, col ) == TILE_WATER &&
+            world->get_tile( row, col + 1 ) == TILE_WATER )
+
+        if ( world->get_tile( row + 1, col + 1 ) != TILE_WATER )
+            rect = RECT_OUTER_CLIFF_SE;
+        else
+            rect = RECT_WATER;
+
+    else if( world->get_tile( row + 1, col ) != TILE_WATER &&
+            world->get_tile( row, col + 1 ) == TILE_WATER )
+
+        rect = RECT_CLIFF_S;
+
+    else if( world->get_tile( row + 1, col ) == TILE_WATER &&
+            world->get_tile( row, col + 1 ) != TILE_WATER )
+
+        rect = RECT_CLIFF_E;
+
+    else if( world->get_tile( row + 1, col ) != TILE_WATER &&
+            world->get_tile( row, col + 1 ) != TILE_WATER )
+
+        rect = RECT_CLIFF_SE;
+
+    //    printf( "DEBUG: Drawing SE tile\n" );
+    apply_surface(
+            col * TILE_SIZE + 16 - camera->x,
+            row * TILE_SIZE + 16 - camera->y,
+            spriteMap, canvas, &rect );
+}
+
+void draw_tree_sprites( int row, int col, SDL_Surface *spriteMap,
+        SDL_Surface *canvas, World *world, SDL_Rect *camera ) {
+
+    SDL_Rect rect;
+
+    // Draw NW tile
+    // Check northern and western tile
+    if (    world->get_tile( row - 1, col ) == TILE_TREES &&
+            world->get_tile( row, col - 1 ) == TILE_TREES )
+
+        rect = RECT_TREES;
+
+    else if( world->get_tile( row - 1, col ) != TILE_TREES &&
+            world->get_tile( row, col - 1 ) == TILE_TREES )
+
+        rect = RECT_TREES_N;
+
+    else if( world->get_tile( row - 1, col ) == TILE_TREES &&
+            world->get_tile( row, col - 1 ) != TILE_TREES )
+
+        rect = RECT_TREES_W;
+
+    else if( world->get_tile( row - 1, col ) != TILE_TREES &&
+            world->get_tile( row, col - 1 ) != TILE_TREES )
+
+        rect = RECT_TREES_NW;
+
+    apply_surface(
+            col * TILE_SIZE - camera->x,
+            row * TILE_SIZE - camera->y,
+            spriteMap, canvas, &rect );
+
+    // Draw NE tile
+    // Check northern and eastern tile
+    if (    world->get_tile( row - 1, col ) == TILE_TREES &&
+            world->get_tile( row, col + 1 ) == TILE_TREES )
+
+        rect = RECT_TREES;
+
+    else if( world->get_tile( row - 1, col ) != TILE_TREES &&
+            world->get_tile( row, col + 1 ) == TILE_TREES )
+
+        rect = RECT_TREES_N;
+
+    else if( world->get_tile( row - 1, col ) == TILE_TREES &&
+            world->get_tile( row, col + 1 ) != TILE_TREES )
+
+        rect = RECT_TREES_E;
+
+    else if( world->get_tile( row - 1, col ) != TILE_TREES &&
+            world->get_tile( row, col + 1 ) != TILE_TREES )
+
+        rect = RECT_TREES_NE;
+
+    apply_surface(
+            col * TILE_SIZE + 16 - camera->x,
+            row * TILE_SIZE - camera->y,
+            spriteMap, canvas, &rect );
+
+    // Draw SW tile
+    // Check southern and western tile
+    if (    world->get_tile( row + 1, col ) == TILE_TREES &&
+            world->get_tile( row, col - 1 ) == TILE_TREES )
+
+        rect = RECT_TREES;
+
+    else if( world->get_tile( row + 1, col ) != TILE_TREES &&
+            world->get_tile( row, col - 1 ) == TILE_TREES )
+
+        rect = RECT_TREES_S;
+
+    else if( world->get_tile( row + 1, col ) == TILE_TREES &&
+            world->get_tile( row, col - 1 ) != TILE_TREES )
+
+        rect = RECT_TREES_W;
+
+    else if( world->get_tile( row + 1, col ) != TILE_TREES &&
+            world->get_tile( row, col - 1 ) != TILE_TREES )
+
+        rect = RECT_TREES_SW;
+
+    apply_surface(
+            col * TILE_SIZE - camera->x,
+            row * TILE_SIZE + 16 - camera->y,
+            spriteMap, canvas, &rect );
+
+    // Draw SE tile
+    // Check southern and eastern tile
+    if (    world->get_tile( row + 1, col ) == TILE_TREES &&
+            world->get_tile( row, col + 1 ) == TILE_TREES )
+
+        rect = RECT_TREES;
+
+    else if( world->get_tile( row + 1, col ) != TILE_TREES &&
+            world->get_tile( row, col + 1 ) == TILE_TREES )
+
+        rect = RECT_TREES_S;
+
+    else if( world->get_tile( row + 1, col ) == TILE_TREES &&
+            world->get_tile( row, col + 1 ) != TILE_TREES )
+
+        rect = RECT_TREES_E;
+
+    else if( world->get_tile( row + 1, col ) != TILE_TREES &&
+            world->get_tile( row, col + 1 ) != TILE_TREES )
+
+        rect = RECT_TREES_SE;
+
+    apply_surface(
+            col * TILE_SIZE + 16 - camera->x,
+            row * TILE_SIZE + 16 - camera->y,
+            spriteMap, canvas, &rect );
+
+}
+
+void draw_mini_map( SDL_Surface *dest, SDL_Rect *bounds, int zoom,
+        World *world, std::vector<Player> *pPlayers, int currentPlayer,
+        SDL_Rect *camera )
+{
+    SDL_FillRect( screen, bounds, 0x00111122 );
+
+    int x = 0, y = 0;
+    Player *pCurrentPlayer = &pPlayers->at( currentPlayer );
+
+    for( int wRow = 0; wRow < world->get_rows( ); ++wRow, y += zoom ) {
+
+        if( wRow * zoom > bounds->h ) break;
+
+        for( int wCol = 0; wCol < world->get_cols( ); ++wCol, x += zoom ) {
+
+            if( wCol * zoom > bounds->w ) break;
+
+            if( pCurrentPlayer->tile_is_discovered( wRow, wCol ) == false )
+                continue;
+
+            Uint32 pixel;
+
+            switch( world->get_tile( wRow, wCol ) ) {
+                case TILE_GRASS:
+                    pixel = 0x003e551f;
+                    break;
+
+                case TILE_WATER:
+                    pixel = 0x00000b4f;
+                    break;
+
+                case TILE_TREES:
+                    pixel = 0x00232915;
+                    break;
+
+                default:
+                    pixel = 0x00000000;
+                    break;
+            }
+
+            for ( int i = 0; i < zoom; ++i ) {
+                for ( int j = 0; j < zoom; ++j ) {
+                    put_pixel( dest,
+                            bounds->x + wCol * zoom + j,
+                            bounds->y + wRow * zoom + i,
+                            pixel );
+                }
+            }
+
+        }
+    }
+
+    // Draw camera square
+    int boxMapX     = ( camera->x / TILE_SIZE ) * zoom;
+    int boxMapY     = ( camera->y / TILE_SIZE ) * zoom;
+    int boxMapW     = ( camera->w / TILE_SIZE ) * zoom;
+    int boxMapH     = ( camera->h / TILE_SIZE ) * zoom;
+    Uint32 boxColor = 0x00888888;
+
+    if( boxMapX > bounds->w || boxMapY > bounds->h )
+        return;
+
+    // Horizontal lines
+    for( int i = 0; i <= boxMapW; i += zoom * 2 ) {
+        if( boxMapX + i <= bounds->w ) {
+            put_pixel( dest, bounds->x + boxMapX + i,
+                    bounds->y + boxMapY, boxColor );
+            if( boxMapY + boxMapH <= bounds->h )
+                put_pixel( dest, bounds->x + boxMapX + i,
+                        bounds->y + boxMapY + boxMapH, boxColor );
+        }
+    }
+
+    // Vertical lines
+    for( int i = 0; i <= boxMapH; i += zoom * 2 ) {
+        if( boxMapY + i <= bounds->h ) {
+            put_pixel( dest, bounds->x + boxMapX,
+                    bounds->y + boxMapY + i, boxColor );
+            if( boxMapX + boxMapW <= bounds->w )
+                put_pixel( dest, bounds->x + boxMapX + boxMapW,
+                        bounds->y + boxMapY + i, boxColor );
+        }
+    }
+}
+
+void center_camera( SDL_Rect *camera, int row, int col ) {
+    camera->x = TILE_SIZE * col - camera->w / 2;
+    camera->y = TILE_SIZE * row - camera->h / 2;
+}
